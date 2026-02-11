@@ -1,28 +1,24 @@
-# Bootstrap Pattern: Multi-Tenant MCP Server with Platform JWT Auth
-
-> **Note**: This document describes the **Platform JWT authentication variant** using `jsonwebtoken` with a shared secret. For the **Firebase authentication variant** (as used in eventbrite-mcp-server), see [firebase-bootstrap.md](firebase-bootstrap.md).
+# Firebase Bootstrap Pattern: Multi-Tenant MCP Server with Firebase Auth
 
 ## Overview
 
-This document describes how to replicate the agentbase-mcp-server pattern for **any MCP server** that you want to make multi-tenant with Platform JWT authentication using a shared secret.
+This document describes the **Firebase authentication variant** of the multi-tenant MCP server pattern. This is the pattern used by the **eventbrite-mcp-server** project.
 
-## Pattern Variants
+**Key Difference from Platform JWT Pattern**: Instead of using `jsonwebtoken` for JWT validation with a shared secret, this pattern uses Firebase Authentication for JWT validation with public key verification.
 
-There are two authentication patterns available:
+## When to Use This Pattern
 
-1. **Platform JWT Pattern** (this document) - Uses `jsonwebtoken` with shared secret
-   - ✅ Full control over JWT structure
-   - ✅ No external dependencies
-   - ✅ Custom claims support
-   - ✅ Minimal external API calls
+Use Firebase authentication when:
+- ✅ You already have Firebase Authentication in your platform
+- ✅ You want Google-managed public key infrastructure
+- ✅ You need built-in token refresh and revocation
+- ✅ You want integration with Firebase ecosystem (Firestore, etc.)
 
-2. **Firebase Pattern** ([firebase-bootstrap.md](firebase-bootstrap.md)) - Uses Firebase Authentication
-   - ✅ Managed public key infrastructure
-   - ✅ Automatic key rotation
-   - ✅ Firebase ecosystem integration
-   - ✅ Built-in token refresh/revocation
-
-Choose the pattern that best fits your infrastructure and requirements.
+Use Platform JWT pattern ([bootstrap.md](bootstrap.md)) when:
+- ✅ You want full control over JWT signing/validation
+- ✅ You don't want external dependencies on Firebase
+- ✅ You need custom JWT claims structure
+- ✅ You want to minimize external API calls
 
 ## Prerequisites
 
@@ -41,7 +37,7 @@ This factory should:
 - Accept a userId for tracking
 - Return a configured MCP `Server` instance
 - Register all tools internally
-- **Tool Naming**: Tools must be named `{resourceType}_{tool_name}` (e.g., `instagram_get_profile`)
+- **Tool Naming**: Tools must be named `{resourceType}_{tool_name}` (e.g., `eventbrite_get_events`)
 
 ## Step-by-Step Bootstrap
 
@@ -60,14 +56,15 @@ npm install \
   @modelcontextprotocol/sdk \
   @prmichaelsen/mcp-auth \
   @your-org/your-mcp-base \
-  jsonwebtoken
+  firebase-auth-cloudflare-workers
 
 npm install --save-dev \
   typescript \
   @types/node \
-  @types/jsonwebtoken \
   tsx
 ```
+
+**Note**: We use `firebase-auth-cloudflare-workers` instead of `jsonwebtoken` because it handles Firebase's public key rotation automatically.
 
 ### Step 3: Create Project Structure
 
@@ -76,19 +73,19 @@ your-mcp-server/
 ├── src/
 │   ├── index.ts                    # Main server
 │   ├── auth/
-│   │   ├── platform-jwt-provider.ts    # Platform JWT validation
+│   │   ├── firebase-provider.ts        # Firebase JWT validation
 │   │   └── platform-token-resolver.ts  # Platform API integration
 ├── agent/
-│   ├── integration-plan.md
-│   ├── progress.yaml
-│   ├── TOOL-NAMING-CONVENTION.md
-│   └── tasks/
+│   ├── patterns/
+│   │   ├── firebase-bootstrap.md       # This document
+│   │   └── bootstrap.md                # Platform JWT variant
+│   └── progress.yaml
 ├── package.json
 ├── tsconfig.json
 ├── Dockerfile
-├── cloudbuild.yaml
 ├── .env.example
 ├── .gitignore
+├── .dockerignore
 └── README.md
 ```
 
@@ -107,13 +104,12 @@ your-mcp-server/
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
-    "@prmichaelsen/mcp-auth": "^4.0.0",
+    "@prmichaelsen/mcp-auth": "^0.2.0",
     "@your-org/your-mcp-base": "^1.0.0",
-    "jsonwebtoken": "^9.0.2"
+    "firebase-auth-cloudflare-workers": "^2.0.6"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "@types/jsonwebtoken": "^9.0.5",
     "tsx": "^4.7.0",
     "typescript": "^5.7.2"
   }
@@ -144,38 +140,47 @@ your-mcp-server/
 }
 ```
 
-### Step 6: Create Platform JWT Auth Provider
+### Step 6: Create Firebase Auth Provider
 
-**src/auth/platform-jwt-provider.ts**:
+**src/auth/firebase-provider.ts**:
 
 ```typescript
 import type { AuthProvider, AuthResult, RequestContext } from '@prmichaelsen/mcp-auth';
-import jwt from 'jsonwebtoken';
+import { Auth } from 'firebase-auth-cloudflare-workers';
+import type { KeyStorer } from 'firebase-auth-cloudflare-workers/dist/main/key-store';
 
-export interface PlatformJWTProviderConfig {
-  serviceToken: string;
-  issuer: string;
-  audience: string;
+class MemoryKeyStore implements KeyStorer {
+  private cache = new Map<string, string>();
+  
+  async get<ExpectedValue = unknown>(): Promise<ExpectedValue | null> {
+    const value = this.cache.get('firebase-keys');
+    return (value as ExpectedValue) || null;
+  }
+  
+  async put(value: string, expirationTtl: number): Promise<void> {
+    this.cache.set('firebase-keys', value);
+  }
+}
+
+export interface FirebaseAuthProviderConfig {
+  projectId: string;
   cacheResults?: boolean;
   cacheTtl?: number;
 }
 
-interface CachedAuthResult {
-  result: AuthResult;
-  expiresAt: number;
-}
-
-export class PlatformJWTProvider implements AuthProvider {
-  private config: PlatformJWTProviderConfig;
-  private authCache = new Map<string, CachedAuthResult>();
-  public jwtTokenCache = new Map<string, string>();
+export class FirebaseAuthProvider implements AuthProvider {
+  private auth: Auth;
+  private config: FirebaseAuthProviderConfig;
+  private authCache = new Map<string, { result: AuthResult; expiresAt: number }>();
   
-  constructor(config: PlatformJWTProviderConfig) {
+  constructor(config: FirebaseAuthProviderConfig) {
     this.config = config;
+    const keyStore = new MemoryKeyStore();
+    this.auth = Auth.getOrInitialize(config.projectId, keyStore);
   }
   
   async initialize(): Promise<void> {
-    console.log('Platform JWT auth provider initialized');
+    console.log('Firebase auth provider initialized');
   }
   
   async authenticate(context: RequestContext): Promise<AuthResult> {
@@ -191,37 +196,32 @@ export class PlatformJWTProvider implements AuthProvider {
         return { authenticated: false, error: 'Invalid authorization format' };
       }
       
-      const token = parts[1];
+      const idToken = parts[1];
       
       // Check cache
       if (this.config.cacheResults) {
-        const cached = this.authCache.get(token);
+        const cached = this.authCache.get(idToken);
         if (cached && Date.now() < cached.expiresAt) {
           return cached.result;
         }
       }
       
-      // Verify JWT
-      const decoded = jwt.verify(token, this.config.serviceToken, {
-        issuer: this.config.issuer,
-        audience: this.config.audience
-      }) as { userId: string; email?: string };
-      
-      // Store JWT for forwarding to credentials API
-      this.jwtTokenCache.set(decoded.userId, token);
+      // Verify token with Firebase
+      const decodedToken = await this.auth.verifyIdToken(idToken);
       
       const result: AuthResult = {
         authenticated: true,
-        userId: decoded.userId,
+        userId: decodedToken.sub,
         metadata: {
-          email: decoded.email
+          email: decodedToken.email,
+          emailVerified: decodedToken.email_verified
         }
       };
       
       // Cache result
       if (this.config.cacheResults) {
         const ttl = this.config.cacheTtl || 60000;
-        this.authCache.set(token, {
+        this.authCache.set(idToken, {
           result,
           expiresAt: Date.now() + ttl
         });
@@ -236,16 +236,17 @@ export class PlatformJWTProvider implements AuthProvider {
     }
   }
   
-  getJWTToken(userId: string): string | undefined {
-    return this.jwtTokenCache.get(userId);
-  }
-  
   async cleanup(): Promise<void> {
     this.authCache.clear();
-    this.jwtTokenCache.clear();
   }
 }
 ```
+
+**Key differences from Platform JWT Provider**:
+- Uses `firebase-auth-cloudflare-workers` instead of `jsonwebtoken`
+- Validates against Firebase's public keys (fetched automatically)
+- No shared secret needed - uses Firebase project ID
+- Extracts standard Firebase claims (`sub`, `email`, `email_verified`)
 
 ### Step 7: Create Platform Token Resolver
 
@@ -261,7 +262,7 @@ import type {
 
 export interface PlatformTokenResolverConfig {
   platformUrl: string;
-  authProvider: PlatformJWTProvider;  // Reference to auth provider for JWT access
+  serviceToken: string;
   cacheTokens?: boolean;
   cacheTtl?: number;
 }
@@ -295,17 +296,10 @@ export class PlatformTokenResolver implements ResourceTokenResolver {
         }
       }
       
-      // Get JWT token from auth provider
-      const jwtToken = this.config.authProvider.getJWTToken(userId);
-      if (!jwtToken) {
-        console.warn(`No JWT token found for user ${userId}`);
-        return null;
-      }
-      
-      // Call platform API with JWT (not service token)
+      // Call platform API
       const url = `${this.config.platformUrl}/api/credentials/${resourceType}`;
       const headers: CredentialsAPIHeaders = {
-        'Authorization': `Bearer ${jwtToken}`,
+        'Authorization': `Bearer ${this.config.serviceToken}`,
         'X-User-ID': userId
       };
       
@@ -358,6 +352,8 @@ export class PlatformTokenResolver implements ResourceTokenResolver {
 }
 ```
 
+**Note**: Token resolver is identical to Platform JWT pattern - only the auth provider differs.
+
 ### Step 8: Create Main Server
 
 **src/index.ts**:
@@ -367,14 +363,17 @@ export class PlatformTokenResolver implements ResourceTokenResolver {
 
 import { wrapServer } from '@prmichaelsen/mcp-auth';
 import { createYourServer } from '@your-org/your-mcp-base/factory';
-import { PlatformJWTProvider } from './auth/platform-jwt-provider.js';
+import { FirebaseAuthProvider } from './auth/firebase-provider.js';
 import { PlatformTokenResolver } from './auth/platform-token-resolver.js';
 
 // Configuration
 const config = {
+  firebase: {
+    projectId: process.env.FIREBASE_PROJECT_ID!
+  },
   platform: {
     url: process.env.PLATFORM_URL!,
-    serviceToken: process.env.PLATFORM_SERVICE_TOKEN!
+    serviceToken: process.env.PLATFORM_SERVICE_TOKEN || 'dev-token'
   },
   server: {
     port: parseInt(process.env.PORT || '8080')
@@ -382,8 +381,8 @@ const config = {
 };
 
 // Validate
-if (!config.platform.serviceToken) {
-  console.error('Error: PLATFORM_SERVICE_TOKEN required');
+if (!config.firebase.projectId) {
+  console.error('Error: FIREBASE_PROJECT_ID required');
   process.exit(1);
 }
 
@@ -393,17 +392,15 @@ if (!config.platform.url) {
 }
 
 // Create providers
-const authProvider = new PlatformJWTProvider({
-  serviceToken: config.platform.serviceToken,
-  issuer: 'agentbase.me',
-  audience: 'mcp-server',
+const authProvider = new FirebaseAuthProvider({
+  projectId: config.firebase.projectId,
   cacheResults: true,
   cacheTtl: 60000
 });
 
 const tokenResolver = new PlatformTokenResolver({
   platformUrl: config.platform.url,
-  authProvider: authProvider,  // Pass auth provider reference
+  serviceToken: config.platform.serviceToken,
   cacheTokens: true,
   cacheTtl: 300000
 });
@@ -415,7 +412,7 @@ const wrappedServer = wrapServer({
   },
   authProvider,
   tokenResolver,
-  resourceType: 'your-resource-type', // e.g., 'github', 'slack', etc.
+  resourceType: 'your-resource-type', // e.g., 'eventbrite', 'github', etc.
   transport: {
     type: 'sse',
     port: config.server.port,
@@ -504,11 +501,12 @@ CMD ["node", "dist/index.js"]
 **.env.example**:
 
 ```env
-# Platform JWT (shared secret for JWT validation)
-PLATFORM_SERVICE_TOKEN=your-shared-secret
+# Firebase (for JWT validation)
+FIREBASE_PROJECT_ID=your-firebase-project-id
 
 # Platform API (for token resolution)
 PLATFORM_URL=https://your-platform.com
+PLATFORM_SERVICE_TOKEN=your-service-token
 
 # Server
 PORT=8080
@@ -568,7 +566,7 @@ gcloud run deploy your-mcp-server \
   --image gcr.io/YOUR_PROJECT/your-mcp-server:latest \
   --region us-central1 \
   --allow-unauthenticated \
-  --set-env-vars="PLATFORM_URL=https://your-platform.com,NODE_ENV=production" \
+  --set-env-vars="FIREBASE_PROJECT_ID=your-project,PLATFORM_URL=https://your-platform.com,NODE_ENV=production" \
   --update-secrets=PLATFORM_SERVICE_TOKEN=platform-service-token:latest \
   --min-instances=0 \
   --max-instances=10 \
@@ -617,7 +615,7 @@ export function createYourServer(
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     
-    // Handle tool calls - names match the registered names
+    // Handle tool calls
     switch (name) {
       case 'yourservice_get_data':
         // Handle tool
@@ -632,7 +630,7 @@ export function createYourServer(
 }
 ```
 
-**Important**: Tool names MUST follow the convention `{resourceType}_{tool_name}` where `resourceType` matches the value you'll use in `wrapServer()` config. See [TOOL-NAMING-CONVENTION.md](../TOOL-NAMING-CONVENTION.md) for details.
+**Important**: Tool names MUST follow the convention `{resourceType}_{tool_name}`.
 
 ### 2. Package Exports
 
@@ -650,38 +648,21 @@ export function createYourServer(
 }
 ```
 
-### 3. Build Configuration
-
-Must generate:
-- All source files as .js
-- TypeScript declarations (.d.ts)
-- Preserve directory structure
-
 ## Platform API Requirements
 
 The platform must implement:
 
 ```typescript
 // GET /api/credentials/:provider
-// Headers: { Authorization: Bearer <jwt-token>, X-User-ID: <user-id> }
+// Headers: { Authorization: Bearer <service-token>, X-User-ID: <user-id> }
 
 import type { CredentialsAPIResponse } from '@prmichaelsen/mcp-auth';
-import jwt from 'jsonwebtoken';
 
 export async function GET(request: Request, { params }: { params: { provider: string } }) {
-  // 1. Validate JWT token (same secret as MCP server)
-  const jwtToken = request.headers.get('Authorization')?.replace('Bearer ', '');
-  if (!jwtToken) {
+  // 1. Validate service token
+  const serviceToken = request.headers.get('Authorization')?.replace('Bearer ', '');
+  if (serviceToken !== process.env.PLATFORM_SERVICE_TOKEN) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  
-  try {
-    jwt.verify(jwtToken, process.env.PLATFORM_SERVICE_TOKEN!, {
-      issuer: 'agentbase.me',
-      audience: 'mcp-server'
-    });
-  } catch (error) {
-    return Response.json({ error: 'Invalid token' }, { status: 401 });
   }
   
   // 2. Get userId
@@ -704,7 +685,6 @@ export async function GET(request: Request, { params }: { params: { provider: st
   const response: CredentialsAPIResponse = {
     access_token: credentials.rows[0].access_token,
     expires_at: credentials.rows[0].expires_at,
-    // ... other fields
   };
   
   return Response.json(response);
@@ -722,13 +702,12 @@ npm start
 # Test health
 curl http://localhost:8080/mcp/health
 
-# Test with Platform JWT
-# Generate test JWT (use your PLATFORM_SERVICE_TOKEN)
-node -e "const jwt = require('jsonwebtoken'); console.log(jwt.sign({ userId: 'test-user' }, 'your-service-token', { issuer: 'agentbase.me', audience: 'mcp-server', expiresIn: '1h' }))"
+# Get Firebase JWT from your Firebase project
+# (Use Firebase Admin SDK or client SDK to generate)
 
 # Test MCP endpoint
 curl -X POST http://localhost:8080/mcp/message \
-  -H "Authorization: Bearer <jwt-from-above>" \
+  -H "Authorization: Bearer <firebase-jwt>" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 ```
@@ -736,10 +715,10 @@ curl -X POST http://localhost:8080/mcp/message \
 ### 2. Production Testing
 
 ```bash
-# Get Platform JWT from your platform
+# Get Firebase JWT from your platform
 # Then test MCP endpoint
 curl -X POST https://your-server.run.app/mcp/message \
-  -H "Authorization: Bearer <platform-jwt>" \
+  -H "Authorization: Bearer <firebase-jwt>" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 ```
@@ -747,91 +726,73 @@ curl -X POST https://your-server.run.app/mcp/message \
 ## Architecture Summary
 
 ```
-Client (Platform JWT)
+Client (Firebase JWT)
   ↓
-Platform JWT Provider (validates JWT → userId)
+Firebase Auth Provider (validates JWT with Firebase public keys → userId)
   ↓
-Platform Token Resolver (userId → API token via platform with JWT forwarding)
+Platform Token Resolver (userId → API token via platform)
   ↓
 Your MCP Server (executes tools with {resourceType}_ prefix)
   ↓
 Your External API
 ```
 
+## Key Differences from Platform JWT Pattern
+
+| Aspect | Firebase Pattern | Platform JWT Pattern |
+|--------|-----------------|---------------------|
+| JWT Library | `firebase-auth-cloudflare-workers` | `jsonwebtoken` |
+| Validation | Firebase public keys (auto-rotated) | Shared secret |
+| Configuration | `FIREBASE_PROJECT_ID` | `PLATFORM_SERVICE_TOKEN` |
+| Token Source | Firebase Authentication | Custom JWT signing |
+| Public Key Management | Automatic by Firebase | Manual (shared secret) |
+| Token Claims | Standard Firebase claims | Custom claims structure |
+| External Dependency | Firebase service | None |
+
 ## Key Benefits
 
 1. **Zero modification** to base MCP server
 2. **Automatic multi-tenancy** via server wrapping
-3. **Platform JWT authentication** built-in
-4. **JWT forwarding** to credentials API (single token flow)
-5. **Platform-managed credentials** (secure)
-6. **Stateless MCP server** (no database)
-7. **Type-safe** with shared API contracts
-8. **Production-ready** with health checks
-9. **Tool naming convention** enforced ({resourceType}_{tool_name})
+3. **Firebase authentication** with automatic key rotation
+4. **Platform-managed credentials** (secure)
+5. **Stateless MCP server** (no database)
+6. **Type-safe** with shared API contracts
+7. **Production-ready** with health checks
+8. **Tool naming convention** enforced ({resourceType}_{tool_name})
 
 ## Examples
 
-- **Instagram**: [@prmichaelsen/agentbase-mcp-server](https://github.com/prmichaelsen/agentbase-mcp-server)
-- **Base Pattern**: This document
+- **Eventbrite**: [@prmichaelsen/eventbrite-mcp-server](https://github.com/prmichaelsen/eventbrite-mcp-server) - This project
+- **Platform JWT Pattern**: [bootstrap.md](bootstrap.md) - Alternative pattern
 
-## Common Integrations
+## When to Choose Firebase vs Platform JWT
 
-### GitHub MCP Server
-```typescript
-import { createGitHubServer } from '@your-org/github-mcp/factory';
-import { PlatformJWTProvider } from './auth/platform-jwt-provider.js';
-import { PlatformTokenResolver } from './auth/platform-token-resolver.js';
+### Choose Firebase Pattern When:
+- ✅ Already using Firebase Authentication
+- ✅ Want managed public key infrastructure
+- ✅ Need Firebase ecosystem integration
+- ✅ Want automatic token refresh/revocation
+- ✅ Prefer not managing JWT secrets
 
-const authProvider = new PlatformJWTProvider({
-  serviceToken: process.env.PLATFORM_SERVICE_TOKEN!,
-  issuer: 'agentbase.me',
-  audience: 'mcp-server'
-});
-
-const wrapped = wrapServer({
-  serverFactory: (accessToken, userId) => createGitHubServer(accessToken, userId),
-  authProvider,
-  tokenResolver: new PlatformTokenResolver({ platformUrl: 'https://platform.com', authProvider }),
-  resourceType: 'github',  // Tools must be named github_*
-  transport: { type: 'sse', port: 8080 }
-});
-```
-
-### Slack MCP Server
-```typescript
-import { createSlackServer } from '@your-org/slack-mcp/factory';
-import { PlatformJWTProvider } from './auth/platform-jwt-provider.js';
-import { PlatformTokenResolver } from './auth/platform-token-resolver.js';
-
-const authProvider = new PlatformJWTProvider({
-  serviceToken: process.env.PLATFORM_SERVICE_TOKEN!,
-  issuer: 'agentbase.me',
-  audience: 'mcp-server'
-});
-
-const wrapped = wrapServer({
-  serverFactory: (accessToken, userId) => createSlackServer(accessToken, userId),
-  authProvider,
-  tokenResolver: new PlatformTokenResolver({ platformUrl: 'https://platform.com', authProvider }),
-  resourceType: 'slack',  // Tools must be named slack_*
-  transport: { type: 'sse', port: 8080 }
-});
-```
+### Choose Platform JWT Pattern When:
+- ✅ Want full control over JWT structure
+- ✅ Don't want Firebase dependency
+- ✅ Need custom claims beyond Firebase standard
+- ✅ Want to minimize external API calls
+- ✅ Already have JWT infrastructure
 
 ## Summary
 
 This pattern enables you to:
 - ✅ Take any MCP server with a factory function
-- ✅ Add Platform JWT authentication
-- ✅ Add JWT forwarding to credentials API
+- ✅ Add Firebase authentication
 - ✅ Add platform-managed credentials
 - ✅ Deploy as multi-tenant service
 - ✅ Zero modification to base server
 - ✅ Enforce tool naming convention ({resourceType}_{tool_name})
 
-**Total time**: ~4-6 hours for a new integration (most time is base server factory refactor)
+**Total time**: ~4-6 hours for a new integration
 
-**Result**: Production-ready multi-tenant MCP server with Platform JWT auth!
+**Result**: Production-ready multi-tenant MCP server with Firebase auth!
 
-**See also**: [TOOL-NAMING-CONVENTION.md](../TOOL-NAMING-CONVENTION.md) for tool naming requirements
+**See also**: [bootstrap.md](bootstrap.md) for the Platform JWT authentication variant
