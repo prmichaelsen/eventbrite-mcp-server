@@ -1,0 +1,22 @@
+{
+  "name": "@prmichaelsen/eventbrite-mcp-server",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@prmichaelsen/eventbrite-mcp": "^1.0.5",
+    "@prmichaelsen/mcp-auth": "^0.2.0",
+    "firebase-auth-cloudflare-workers": "^2.0.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.7.0",
+    "typescript": "^5.7.2"
+  }
+}
