@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-02-17
+
+### Changed
+- **BREAKING**: Replaced Firebase authentication with Platform JWT authentication
+- Authentication now uses `jsonwebtoken` library with shared secret instead of Firebase
+- Removed `FIREBASE_PROJECT_ID` environment variable requirement
+- `PLATFORM_SERVICE_TOKEN` now used for both JWT validation and platform API calls
+- Simplified authentication configuration
+
+### Added
+- `src/auth/platform-jwt-provider.ts` - Platform JWT authentication provider
+- Support for `jsonwebtoken` library (^9.0.2)
+
+### Removed
+- Firebase authentication support (`firebase-auth-cloudflare-workers`)
+- `FIREBASE_PROJECT_ID` configuration requirement
+- `src/auth/firebase-provider.ts` (replaced by platform-jwt-provider.ts)
+
+### Migration Guide
+1. Remove `FIREBASE_PROJECT_ID` from your `.env` file
+2. Ensure `PLATFORM_SERVICE_TOKEN` is set (used for JWT validation)
+3. Run `npm install` to update dependencies
+4. JWT tokens must now be signed with `PLATFORM_SERVICE_TOKEN` (shared secret)
+5. JWT must include `issuer: 'agentbase.me'` and `audience: 'mcp-server'`
+
 ## [1.1.0] - 2026-02-17
 
 ### Added

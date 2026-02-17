@@ -2,17 +2,14 @@
 
 import { wrapServer } from '@prmichaelsen/mcp-auth';
 import { createEventbriteServer } from '@prmichaelsen/eventbrite-mcp/factory';
-import { FirebaseAuthProvider } from './auth/firebase-provider.js';
+import { PlatformJWTProvider } from './auth/platform-jwt-provider.js';
 import { PlatformTokenResolver } from './auth/platform-token-resolver.js';
 
 // Configuration
 const config = {
-  firebase: {
-    projectId: process.env.FIREBASE_PROJECT_ID!
-  },
   platform: {
     url: process.env.PLATFORM_URL!,
-    serviceToken: process.env.PLATFORM_SERVICE_TOKEN || 'dev-token'
+    serviceToken: process.env.PLATFORM_SERVICE_TOKEN!
   },
   server: {
     port: parseInt(process.env.PORT || '8080')
@@ -20,8 +17,8 @@ const config = {
 };
 
 // Validate
-if (!config.firebase.projectId) {
-  console.error('Error: FIREBASE_PROJECT_ID required');
+if (!config.platform.serviceToken) {
+  console.error('Error: PLATFORM_SERVICE_TOKEN required');
   process.exit(1);
 }
 
@@ -31,15 +28,17 @@ if (!config.platform.url) {
 }
 
 // Create providers
-const authProvider = new FirebaseAuthProvider({
-  projectId: config.firebase.projectId,
+const authProvider = new PlatformJWTProvider({
+  serviceToken: config.platform.serviceToken,
+  issuer: 'agentbase.me',
+  audience: 'mcp-server',
   cacheResults: true,
   cacheTtl: 60000
 });
 
 const tokenResolver = new PlatformTokenResolver({
   platformUrl: config.platform.url,
-  serviceToken: config.platform.serviceToken,
+  authProvider: authProvider,
   cacheTokens: true,
   cacheTtl: 300000
 });

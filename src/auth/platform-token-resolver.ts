@@ -4,10 +4,11 @@ import type {
   CredentialsAPIHeaders,
   TenantAPIErrorResponse
 } from '@prmichaelsen/mcp-auth';
+import type { PlatformJWTProvider } from './platform-jwt-provider.js';
 
 export interface PlatformTokenResolverConfig {
   platformUrl: string;
-  serviceToken: string;
+  authProvider: PlatformJWTProvider;
   cacheTokens?: boolean;
   cacheTtl?: number;
 }
@@ -41,10 +42,17 @@ export class PlatformTokenResolver implements ResourceTokenResolver {
         }
       }
       
-      // Call platform API
+      // Get JWT token from auth provider
+      const jwtToken = this.config.authProvider.getJWTToken(userId);
+      if (!jwtToken) {
+        console.warn(`No JWT token found for user ${userId}`);
+        return null;
+      }
+      
+      // Call platform API with JWT (not service token)
       const url = `${this.config.platformUrl}/api/credentials/${resourceType}`;
       const headers: CredentialsAPIHeaders = {
-        'Authorization': `Bearer ${this.config.serviceToken}`,
+        'Authorization': `Bearer ${jwtToken}`,
         'X-User-ID': userId
       };
       
