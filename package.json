@@ -1,6 +1,6 @@
 {
   "name": "@prmichaelsen/eventbrite-mcp-server",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
-    "@prmichaelsen/eventbrite-mcp": "^1.0.5",
+    "@prmichaelsen/eventbrite-mcp": "^1.0.6",
     "@prmichaelsen/mcp-auth": "^0.2.0",
     "firebase-auth-cloudflare-workers": "^2.0.6"
   },
