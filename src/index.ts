@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { wrapServer } from '@prmichaelsen/mcp-auth';
-import { createEventbriteServer } from '@prmichaelsen/eventbrite-mcp';
+import { createEventbriteServer } from '@prmichaelsen/eventbrite-mcp/factory';
 import { FirebaseAuthProvider } from './auth/firebase-provider.js';
 import { PlatformTokenResolver } from './auth/platform-token-resolver.js';
 
