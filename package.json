@@ -11,7 +11,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "@prmichaelsen/eventbrite-mcp": "^1.0.7",
-    "@prmichaelsen/mcp-auth": "^0.2.0",
+    "@prmichaelsen/mcp-auth": "^7.0.3",
     "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {
